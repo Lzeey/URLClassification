@@ -1,0 +1,6 @@
+block.txt
+blocklist.php.txt https://zeustracker.abuse.ch/blocklist.php?download=domainblocklist
+domains.txt http://mirror1.malwaredomains.com/files/domains.txt
+export.csv http://www.malwaredomainlist.com/forums/index.php?topic=3270.0
+RW_DOMBL.txt http://ransomwaretracker.abuse.ch/downloads/RW_DOMBL.txt
+suspiciousdomains_Low.txt https://isc.sans.edu/feeds/suspiciousdomains_Low.txt
