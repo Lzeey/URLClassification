@@ -36,7 +36,7 @@ def read_data():
     #Malwaredomainlist - http://www.malwaredomainlist.com/forums/index.php?topic=3270.0
     df4 = pd.read_csv('list/export.csv', header=None, names=['date','domain','ip','reverse_lookup', 'description','registrant','asn', 'NULL', 'country'], index_col=False)
     blank_indices = df4['domain'] == '-'
-    df4.domain[blank_indices] = df4.ip[blank_indices]
+    df4.loc[blank_indices, "domain"] = df4.ip[blank_indices]
     df4 = df4['domain']
     
     #Randomware - http://ransomwaretracker.abuse.ch/downloads/RW_DOMBL.txt
@@ -53,7 +53,7 @@ def read_data():
     print "Unique entries: %d" % (len(df_all))
     return df_all
     
-def extract_tld(url, tldobj=None, type='tld'):
+def extract_tld(url, tldobj=None, dom_lvl='tld'):
     """
     Performs a map to extract information from domain. 
     Inputs:
@@ -65,21 +65,33 @@ def extract_tld(url, tldobj=None, type='tld'):
         tldobj = tldextract.TLDExtract()
     ext = tldobj(url)
     
-    if type == 'sld':
+    if dom_lvl == 'sld':
         return ext[1]
-    elif type == 'tld':
+    elif dom_lvl == 'tld':
         if ext[2] is None: #No valid tld found. Return final tld. 
         #TODO: Does not work for IP. Need a separate check
             return url.split('.')[-1]
         else:
             return ext[2]
-    elif type == 'domain':
+    elif dom_lvl == 'domain':
         if ext[2] is None: #No valid tld found. Return entire url
             return url
         else:
             return '.'.join(part for part in ext[1:] if part)
+    elif dom_lvl == 'subdomain':
+        return ext[0]
+    elif dom_lvl == 'all':
+        return [ext[0], ext[1], ext[2]]
     else: #Invalid type
         raise('InvalidTypeError')
+
+def strip_www(series):
+    """
+    Strip urls starting with www. (And remove from string)
+    """
+    starts_with_www = series.str.startswith('www.')
+    series.loc[starts_with_www] = series[starts_with_www].str.replace('www.', '', 1)
+    return series
 #    
 #def extract_tld(url, tldobj=None):
 #    """
@@ -122,27 +134,69 @@ def initialise_tldextract():
                                     cache_file=base_path+'\\Private.tld_set')                
     return pub_ext, priv_ext
 
-def augment_lexical(df):
+def split_url(s, tgt_col, tldobj=None):
+    """
+    Performs url structure splitting on tgt_col. s is a pandas series (can get from apply function with axis=1)
+    Will extract 
+    sld 
+    tld 
+    subdomain
+    """
+    if tldobj is None:
+        tldobj = tldextract.TLDExtract()
+    ext = tldobj(s[tgt_col])
+    s['tld'] = ext[2]
+    s['sld'] = ext[1]
+    s['subdomain'] = ext[0]
+    return s
+    
+def augment_lexical(df, tgt_col='domain'):
     """
     Inserts columns 
     'sld':(Second level domain)
     'tld': (Top level domain)
+    'dom_depth': Subdomain depth. 0 for no subdomain.
+    'dom_alpha': Proportion of alphabetical domain characters in SLD
     'sld_len': SLD length
     TLD uses the normal public suffix list. SLD extraction looks at public domain extension.
+    N.B. Please strip domains of www before using this function
     """
     pub_ext, priv_ext = initialise_tldextract()
     
+    df[tgt_col] = strip_www(df[tgt_col])
+    #Extract a copy of the target column, then perform unique
+    #This is to reduce workload on tldextract
+    tmp_df = df[[tgt_col]].drop_duplicates()
+    
     #Extract TLD
-    df['tld'] = df['domain'].apply(extract_tld, tldobj=pub_ext, type='tld')
+    #tmp_df = tmp_df.apply(split_url, axis=1, tgt_col=tgt_col, tldobj=pub_ext)
+    tmp_df['dom_split'] = tmp_df[tgt_col].apply(extract_tld, tldobj=pub_ext, dom_lvl='all')
+    tmp_df['tld'] = tmp_df['dom_split'].str[2] #Trick from Wes
+    tmp_df['sld'] = tmp_df['dom_split'].str[1]
+    tmp_df['subdomain'] = tmp_df['dom_split'].str[0]
+    #tmp_df['tld'] = tmp_df[tgt_col].apply(extract_tld, tldobj=pub_ext, type='tld')
     
     #Extract SLD 
-    df['sld'] = df['domain'].apply(extract_tld, tldobj=pub_ext, type='sld')
+    #tmp_df['sld'] = tmp_df[tgt_col].apply(extract_tld, tldobj=pub_ext, type='sld')
     
-    #Extract SLD+TLD
-    df['host'] = df['domain'].apply(extract_tld, tldobj=priv_ext, type='domain')
+    #Extract SLD+TLD [optional]
+    #tmp_df['host'] = tmp_df[tgt_col].apply(extract_tld, tldobj=priv_ext, type='domain')
     
-    df['sld_len'] = df['sld'].str.len()
+    #Extract sld length
+    tmp_df['sld_len'] = tmp_df['sld'].str.len()
     
+    #Count alphanumeric ratio
+    tmp_df['dom_alpha'] = (1.0 * tmp_df['sld'].str.count(r'[0-9]')) / tmp_df['sld_len']
+    
+    #Count number of subdomain levels
+    tmp_df['dom_depth'] = tmp_df['subdomain'].str.count(r'\.') + 1
+    tmp_df.loc[tmp_df['subdomain'] == "", 'dom_depth'] = 0
+    
+    #House-keeping
+    tmp_df.drop('dom_split', axis=1, inplace=True)
+    
+    #Join back
+    df = df.merge(tmp_df, on='domain')
     return df
     
     
